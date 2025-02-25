@@ -64,6 +64,7 @@ def getArgsParser():
     parser.add_argument("--major", default=17, metavar="version", help="The major version to download (defaults to 17)")
     parser.add_argument("--preview", dest="type", default="release", const="pre", action="store_const", help="Download the preview version instead of the release version")
     parser.add_argument("--cache", metavar="dir", help="Directory to use as a persistent cache for downloaded files")
+    parser.add_argument("--migrate-from", metavar="dir", help="Old cache directory from which to migrate existing selected files when downloading to another location")
     parser.add_argument("--dest", metavar="dir", help="Directory to install into")
     parser.add_argument("package", metavar="package", help="Package to install. If omitted, installs the default command line tools.", nargs="*")
     parser.add_argument("--ignore", metavar="component", help="Package to skip", action="append")
@@ -532,37 +533,58 @@ def getPayloadName(payload):
         name = name.split("/")[-1]
     return name
 
-def downloadPackages(selected, cache, allowHashMismatch = False):
+def downloadOrMigratePackages(selected, cache, oldcache = None, allowHashMismatch = False):
+    if oldcache == cache:
+        oldcache = None
     pool = multiprocessing.Pool(5)
     tasks = []
     makedirs(cache)
     for p in selected:
         if not "payloads" in p:
             continue
-        dir = os.path.join(cache, getPackageKey(p))
-        makedirs(dir)
+        pkgkey = getPackageKey(p)
+        destdir = os.path.join(cache, pkgkey)
+        srcdir = os.path.join(oldcache, pkgkey) if oldcache is not None else None
+        makedirs(destdir)
         for payload in p["payloads"]:
             name = getPayloadName(payload)
-            destname = os.path.join(dir, name)
-            fileid = os.path.join(getPackageKey(p), name)
-            args = (payload, destname, fileid, allowHashMismatch)
+            destname = os.path.join(destdir, name)
+            srcname = os.path.join(srcdir, name) if srcdir is not None else None
+            fileid = os.path.join(pkgkey, name)
+            args = (payload, destname, srcname, fileid, allowHashMismatch)
             tasks.append(pool.apply_async(_downloadPayload, args))
 
     downloaded = sum(task.get() for task in tasks)
     pool.close()
     print("Downloaded %s in total" % (formatSize(downloaded)))
 
-def _downloadPayload(payload, destname, fileid, allowHashMismatch):
+def _downloadPayload(payload, destname, srcname, fileid, allowHashMismatch):
     attempts = 5
     for attempt in range(attempts):
         try:
+            if srcname is not None and os.access(srcname, os.F_OK) == False:
+                srcname = None
             if os.access(destname, os.F_OK):
                 if "sha256" in payload:
                     if sha256File(destname).lower() != payload["sha256"].lower():
                         print("Incorrect existing file %s, removing" % (fileid), flush=True)
                         os.remove(destname)
                     else:
+                        if srcname is not None:
+                            os.remove(srcname)
                         print("Using existing file %s" % (fileid), flush=True)
+                        return 0
+                else:
+                    return 0
+            if srcname is not None:
+                if "sha256" in payload:
+                    if sha256File(srcname).lower() != payload["sha256"].lower():
+                        print("Incorrect old cached copy %s, removing" % (fileid), flush=True)
+                        os.remove(srcname)
+                        srcname = None
+                    else:
+                        print("Migrating old cached copy %s" % (fileid), flush=True)
+                        shutil.move(srcname, destname)
                         return 0
                 else:
                     return 0
@@ -818,8 +840,12 @@ if __name__ == "__main__":
         print("No destination directory set!")
         sys.exit(1)
 
+    oldcache = None
+    if args.migrate_from is not None:
+        oldcache = os.path.abspath(args.migrate_from)
+
     try:
-        downloadPackages(selected, cache, allowHashMismatch=args.only_download)
+        downloadOrMigratePackages(selected, cache, oldcache, allowHashMismatch=args.only_download)
         if args.only_download:
             sys.exit(0)
 

@@ -621,12 +621,14 @@ def acquirePackages(selected, cache, oldcache = None, allowHashMismatch = False)
         print("Downloaded %s, migrated %s (%s total)" % (formatSize(downloaded), formatSize(migrated), formatSize(downloaded + migrated)))
 
 def _acquirePayload(payload, destname, fileid, srcname, allowHashMismatch):
+    size = payload["size"] if "size" in payload else 0
+    hash = payload["sha256"].lower() if "sha256" in payload else None
     attempts = 5
     for attempt in range(attempts):
         try:
             if os.access(destname, os.F_OK):
-                if "sha256" in payload:
-                    if sha256File(destname).lower() != payload["sha256"].lower():
+                if hash is not None:
+                    if sha256File(destname).lower() != hash:
                         print("Incorrect existing file %s, removing" % (fileid), flush=True)
                         os.remove(destname)
                     else:
@@ -636,12 +638,9 @@ def _acquirePayload(payload, destname, fileid, srcname, allowHashMismatch):
                         return (0, 0)
                 else:
                     return (0, 0)
-            size = 0
-            if "size" in payload:
-                size = payload["size"]
             if srcname is not None:
-                if "sha256" in payload:
-                    if sha256File(srcname).lower() != payload["sha256"].lower():
+                if hash is not None:
+                    if sha256File(srcname).lower() != hash:
                         print("Incorrect old cached copy %s, removing" % (fileid), flush=True)
                         os.remove(srcname)
                         srcname = None
@@ -653,8 +652,8 @@ def _acquirePayload(payload, destname, fileid, srcname, allowHashMismatch):
                     return (0, 0)
             print("Downloading %s (%s)" % (fileid, formatSize(size)), flush=True)
             urllib.request.urlretrieve(payload["url"], destname)
-            if "sha256" in payload:
-                if sha256File(destname).lower() != payload["sha256"].lower():
+            if hash is not None:
+                if sha256File(destname).lower() != hash:
                     if allowHashMismatch:
                         print("WARNING: Incorrect hash for downloaded file %s" % (fileid), flush=True)
                     else:
